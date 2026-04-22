@@ -1,0 +1,149 @@
+Q5 — Jenkins Pipeline: What Goes Where
+The answer is both, in the right order. Here's the mental model:
+Your Code (GitHub repo)          Jenkins (running in Docker)
+─────────────────────────        ──────────────────────────
+app.py                    ←───   Jenkins clones this
+Dockerfile                      
+Jenkinsfile               ←───   Jenkins reads & runs this
+requirements.txt
+Jenkins pulls from GitHub — it doesn't know about your local VS Code files until you push them.
+
+Step-by-Step: Full Q5 Execution Order
+Phase 1 — Prepare your GitHub repo first (VS Code)
+Create this folder structure locally:
+myapp/
+├── app.py
+├── requirements.txt
+├── Dockerfile
+└── Jenkinsfile
+app.py
+pythonfrom flask import Flask
+app = Flask(__name__)
+
+@app.route('/')
+def home():
+    return "Hello from Jenkins Pipeline!"
+
+if __name__ == '__main__':
+    app.run(host='0.0.0.0', port=5000)
+requirements.txt
+flask
+Dockerfile
+dockerfileFROM python:3.11-slim
+WORKDIR /app
+COPY requirements.txt .
+RUN pip install -r requirements.txt
+COPY . .
+EXPOSE 5000
+CMD ["python", "app.py"]
+Jenkinsfile
+groovypipeline {
+    agent any
+    environment {
+        IMAGE_NAME      = "myapp"
+        DOCKER_HUB_USER = "<your-dockerhub-username>"
+    }
+    stages {
+        stage('Clone') {
+            steps {
+                git branch: 'main',
+                    url: 'https://github.com/<username>/<repo>.git'
+            }
+        }
+        stage('Build Image') {
+            steps {
+                sh 'docker build -t $DOCKER_HUB_USER/$IMAGE_NAME:latest .'
+            }
+        }
+        stage('Push to Hub') {
+            steps {
+                withCredentials([usernamePassword(
+                    credentialsId: 'dockerhub-creds',
+                    usernameVariable: 'DOCKER_USER',
+                    passwordVariable: 'DOCKER_PASS'
+                )]) {
+                    sh '''
+                      echo $DOCKER_PASS | docker login -u $DOCKER_USER --password-stdin
+                      docker push $DOCKER_HUB_USER/$IMAGE_NAME:latest
+                    '''
+                }
+            }
+        }
+        stage('Deploy') {
+            steps {
+                sh 'docker run -d -p 5000:5000 $DOCKER_HUB_USER/$IMAGE_NAME:latest'
+            }
+        }
+    }
+}
+Now push all of this to GitHub:
+bashgit init
+git add .
+git commit -m "Initial commit: add app, Dockerfile, Jenkinsfile"
+git remote add origin https://github.com/<username>/<repo>.git
+git push -u origin main
+
+Phase 2 — Start Jenkins in Docker (terminal)
+bash# Create persistent volume
+docker volume create jenkins-data
+
+# Run Jenkins container
+docker run -d \
+  --name jenkins \
+  -p 8080:8080 -p 50000:50000 \
+  -v jenkins-data:/var/jenkins_home \
+  -v /var/run/docker.sock:/var/run/docker.sock \
+  jenkins/jenkins:lts
+
+# Get the unlock password
+docker exec jenkins cat /var/jenkins_home/secrets/initialAdminPassword
+
+Phase 3 — Set up Jenkins UI (browser)
+
+Open http://localhost:8080
+Paste the password from above
+Click Install suggested plugins → wait
+Create admin user (or skip)
+Install Docker Pipeline Plugin → Manage Jenkins → Plugins → Available → search "Docker Pipeline" → Install
+
+
+Phase 4 — Add Docker Hub credentials in Jenkins
+
+Manage Jenkins → Credentials → (global) → Add Credentials
+Kind: Username with password
+Username: your Docker Hub username
+Password: your Docker Hub password/token
+ID: dockerhub-creds ← must match exactly what's in the Jenkinsfile
+Click Save
+
+
+Phase 5 — Install Docker CLI inside Jenkins container
+Jenkins needs Docker CLI to run docker build and docker push:
+bashdocker exec -u root jenkins bash -c \
+  "apt-get update && apt-get install -y docker.io"
+
+Phase 6 — Create the Pipeline job in Jenkins
+
+Jenkins Dashboard → New Item
+Enter a name (e.g. myapp-pipeline) → select Pipeline → OK
+Scroll to Pipeline section
+Definition → Pipeline script from SCM
+SCM → Git
+Repository URL → https://github.com/<username>/<repo>.git
+Branch → */main
+Script Path → Jenkinsfile (default, leave as is)
+Click Save
+
+
+Phase 7 — Run it
+
+Click Build Now
+Click the build number → Console Output to watch it live
+You should see all 4 stages: Clone → Build Image → Push to Hub → Deploy
+
+
+The Order in One Line
+Write code locally → Push to GitHub → Start Jenkins →
+Configure credentials → Point Jenkins at your repo → Build Now
+GitHub repo must exist and have the Jenkinsfile before you trigger the Jenkins build. That's the key thing bro — Jenkins doesn't run your local files, it always pulls from GitHub.
+docker exec -u root jenkins chmod 666 /var/run/docker.sock
