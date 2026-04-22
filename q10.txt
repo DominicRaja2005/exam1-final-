@@ -5,7 +5,6 @@ Q10: Configure a GitHub Actions workflow to automatically build and test a Pytho
 -----------------------------
 app.py
 test_app.py
-
 -----------------------------
 2. Create Workflow File
 -----------------------------
@@ -47,6 +46,58 @@ git add .
 git commit -m "Added Python CI workflow"
 git push
 
+-------------------------------
+app.py
+-------------------------------
+
+def add(a, b):
+    return a + b
+
+def greet(name):
+    return f"Hello, {name}!"
+-------------------------
+test_app.py
+--------------------------
+from app import add, greet
+
+def test_add():
+    assert add(2, 3) == 5
+
+def test_greet():
+    assert greet("World") == "Hello, World!"
+------------------------------
+requirements.txt
+------------------------------
+pytest
+---------------------------------
+.github/workflows/python-test.yml
+--------------------------------
+yaml
+-------------------------------
+name: Python Build & Test
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  build-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run tests
+        run: pytest test_app.py -v
 -----------------------------
 Execution Summary:
 -----------------------------
